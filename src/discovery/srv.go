@@ -1,21 +1,22 @@
+package discovery
+
 /**
  * srv.go - SRV record DNS resolve discovery implementation
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package discovery
-
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"../config"
-	"../core"
-	"../logging"
-	"../utils"
 	"github.com/miekg/dns"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
+	"github.com/yyyar/gobetween/logging"
+	"github.com/yyyar/gobetween/utils"
 )
 
 const (
@@ -44,14 +45,9 @@ func srvFetch(cfg config.DiscoveryConfig) (*[]core.Backend, error) {
 
 	log.Info("Fetching ", cfg.SrvLookupServer, " ", cfg.SrvLookupPattern)
 
-	timeout := utils.ParseDurationOrDefault(cfg.Timeout, srvDefaultWaitTimeout)
-	c := dns.Client{Net: cfg.SrvDnsProtocol, Timeout: timeout}
-	m := dns.Msg{}
+	/* ----- perform query srv  ----- */
 
-	m.SetQuestion(cfg.SrvLookupPattern, dns.TypeSRV)
-	m.SetEdns0(srvUdpSize, true)
-	r, _, err := c.Exchange(&m, cfg.SrvLookupServer)
-
+	r, err := srvDnsLookup(cfg, cfg.SrvLookupPattern, dns.TypeSRV)
 	if err != nil {
 		return nil, err
 	}
@@ -61,18 +57,54 @@ func srvFetch(cfg config.DiscoveryConfig) (*[]core.Backend, error) {
 		return &[]core.Backend{}, nil
 	}
 
-	// Get hosts from A section
-	hosts := make(map[string]string)
+	/* ----- try to get IPs from additional section ------ */
+
+	hosts := make(map[string]string) // name -> host
 	for _, ans := range r.Extra {
-		record := ans.(*dns.A)
-		hosts[record.Header().Name] = record.A.String()
+		switch record := ans.(type) {
+		case *dns.A:
+			hosts[record.Header().Name] = record.A.String()
+		case *dns.AAAA:
+			hosts[record.Header().Name] = fmt.Sprintf("[%s]", record.AAAA.String())
+		}
 	}
 
-	// Results for combined SRV + A
-	results := []core.Backend{}
+	/* ----- create backend list looking up IP if needed ----- */
+
+	backends := []core.Backend{}
 	for _, ans := range r.Answer {
-		record := ans.(*dns.SRV)
-		results = append(results, core.Backend{
+		record, ok := ans.(*dns.SRV)
+		if !ok {
+			return nil, errors.New("Non-SRV record in SRV answer")
+		}
+
+		// If there were no A/AAAA record in additional SRV response,
+		// fetch it
+		if _, ok := hosts[record.Target]; !ok {
+			log.Debug("Fetching ", cfg.SrvLookupServer, " A/AAAA ", record.Target)
+
+			ip, err := srvIPLookup(cfg, record.Target, dns.TypeA)
+			if err != nil {
+				log.Warn("Error fetching A record for ", record.Target, ": ", err)
+			}
+
+			if ip == "" {
+				ip, err = srvIPLookup(cfg, record.Target, dns.TypeAAAA)
+				if err != nil {
+					log.Warn("Error fetching AAAA record for ", record.Target, ": ", err)
+				}
+			}
+
+			if ip != "" {
+				hosts[record.Target] = ip
+			} else {
+				log.Warn("No IP found for ", record.Target, ", skipping...")
+				continue
+			}
+		}
+
+		// Append new backends
+		backends = append(backends, core.Backend{
 			Target: core.Target{
 				Host: hosts[record.Target],
 				Port: fmt.Sprintf("%v", record.Port),
@@ -86,5 +118,43 @@ func srvFetch(cfg config.DiscoveryConfig) (*[]core.Backend, error) {
 		})
 	}
 
-	return &results, nil
+	return &backends, nil
+}
+
+/**
+ * Perform DNS Lookup with needed pattern and type
+ */
+func srvDnsLookup(cfg config.DiscoveryConfig, pattern string, typ uint16) (*dns.Msg, error) {
+	timeout := utils.ParseDurationOrDefault(cfg.Timeout, srvDefaultWaitTimeout)
+	c := dns.Client{Net: cfg.SrvDnsProtocol, Timeout: timeout}
+	m := dns.Msg{}
+
+	m.SetQuestion(pattern, typ)
+	m.SetEdns0(srvUdpSize, true)
+	r, _, err := c.Exchange(&m, cfg.SrvLookupServer)
+
+	return r, err
+}
+
+/**
+ * Perform DNS lookup and extract IP address
+ */
+func srvIPLookup(cfg config.DiscoveryConfig, pattern string, typ uint16) (string, error) {
+	resp, err := srvDnsLookup(cfg, pattern, typ)
+	if err != nil {
+		return "", err
+	}
+
+	if len(resp.Answer) == 0 {
+		return "", nil
+	}
+
+	switch ans := resp.Answer[0].(type) {
+	case *dns.A:
+		return ans.A.String(), nil
+	case *dns.AAAA:
+		return fmt.Sprintf("[%s]", ans.AAAA.String()), nil
+	default:
+		return "", nil
+	}
 }

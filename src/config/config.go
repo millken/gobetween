@@ -1,10 +1,11 @@
+package config
+
 /**
  * config.go - config file definitions
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  * @author Gene Ponomarenko <kikomdev@gmail.com>
  */
-package config
 
 /**
  * Config file top-level object
@@ -12,7 +13,10 @@ package config
 type Config struct {
 	Logging  LoggingConfig     `toml:"logging" json:"logging"`
 	Api      ApiConfig         `toml:"api" json:"api"`
+	Metrics  MetricsConfig     `toml:"metrics" json:"metrics"`
 	Defaults ConnectionOptions `toml:"defaults" json:"defaults"`
+	Acme     *AcmeConfig       `toml:"acme" json:"acme"`
+	Profiler *ProfilerConfig   `toml:"profiler" json:"profiler"`
 	Servers  map[string]Server `toml:"servers" json:"servers"`
 }
 
@@ -22,6 +26,7 @@ type Config struct {
 type LoggingConfig struct {
 	Level  string `toml:"level" json:"level"`
 	Output string `toml:"output" json:"output"`
+	Format string `toml:"format" json:"format"`
 }
 
 /**
@@ -52,6 +57,14 @@ type ApiTlsConfig struct {
 }
 
 /**
+ * Metrics config section
+ */
+type MetricsConfig struct {
+	Enabled bool   `toml:"enabled" json:"enabled"`
+	Bind    string `toml:"bind" json:"bind"`
+}
+
+/**
  * Default values can be overridden in server
  */
 type ConnectionOptions struct {
@@ -59,6 +72,25 @@ type ConnectionOptions struct {
 	ClientIdleTimeout        *string `toml:"client_idle_timeout" json:"client_idle_timeout"`
 	BackendIdleTimeout       *string `toml:"backend_idle_timeout" json:"backend_idle_timeout"`
 	BackendConnectionTimeout *string `toml:"backend_connection_timeout" json:"backend_connection_timeout"`
+}
+
+/**
+ * Acme config
+ */
+type AcmeConfig struct {
+	Challenge string `toml:"challenge" json:"challenge"`
+	HttpBind  string `toml:"http_bind" json:"http_bind"`
+	CacheDir  string `toml:"cache_dir" json:"cache_dir"`
+}
+
+/**
+ * Pprof profiler config
+ */
+type ProfilerConfig struct {
+	// enabled
+	Enabled bool `toml:"enabled" json:"enabled"`
+	// hostname:port
+	Bind string `toml:"bind" json:"bind"`
 }
 
 /**
@@ -91,11 +123,21 @@ type Server struct {
 	// Access configuration
 	Access *AccessConfig `toml:"access" json:"access"`
 
+	// ProxyProtocol configuration
+	ProxyProtocol *ProxyProtocol `toml:"proxy_protocol" json:"proxy_protocol"`
+
 	// Discovery configuration
 	Discovery *DiscoveryConfig `toml:"discovery" json:"discovery"`
 
 	// Healthcheck configuration
 	Healthcheck *HealthcheckConfig `toml:"healthcheck" json:"healthcheck"`
+}
+
+/**
+ * ProxyProtocol configurtion
+ */
+type ProxyProtocol struct {
+	Version string `toml:"version" json:"version"`
 }
 
 /**
@@ -123,8 +165,9 @@ type tlsCommon struct {
  * for protocol = "tls"
  */
 type Tls struct {
-	CertPath string `toml:"cert_path" json:"cert_path"`
-	KeyPath  string `toml:"key_path" json:"key_path"`
+	AcmeHosts []string `toml:"acme_hosts" json:"acme_hosts"`
+	CertPath  string   `toml:"cert_path" json:"cert_path"`
+	KeyPath   string   `toml:"key_path" json:"key_path"`
 	tlsCommon
 }
 
@@ -143,6 +186,7 @@ type BackendsTls struct {
 type Udp struct {
 	MaxRequests  uint64 `toml:"max_requests" json:"max_requests"`
 	MaxResponses uint64 `toml:"max_responses" json:"max_responses"`
+	Transparent  bool   `toml:"transparent" json:"transparent"`
 }
 
 /**
@@ -228,6 +272,7 @@ type ConsulDiscoveryConfig struct {
 	ConsulTlsCertPath   string `toml:"consul_tls_cert_path" json:"consul_tls_cert_path"`
 	ConsulTlsKeyPath    string `toml:"consul_tls_key_path" json:"consul_tls_key_path"`
 	ConsulTlsCacertPath string `toml:"consul_tls_cacert_path" json:"consul_tls_cacert_path"`
+	ConsulAclToken      string `toml:"consul_acl_token" json:"consul_acl_token"`
 }
 
 type LXDDiscoveryConfig struct {
@@ -262,13 +307,26 @@ type HealthcheckConfig struct {
 	Fails    int    `toml:"fails" json:"fails"`
 	Timeout  string `toml:"timeout" json:"timeout"`
 
+	// The liveness when a backend is first discovered (default healthy)
+	// healthy | unhealthy
+	InitialStatus *string `toml:"initial_status" json:"initial_status"`
+
 	/* Depends on Kind */
 
 	*PingHealthcheckConfig
 	*ExecHealthcheckConfig
+	*ProbeHealthcheckConfig
 }
 
 type PingHealthcheckConfig struct{}
+
+type ProbeHealthcheckConfig struct {
+	ProbeProtocol string `toml:"probe_protocol" json:"probe_protocol"`
+	ProbeStrategy string `toml:"probe_strategy" json:"probe_strategy"`
+	ProbeSend     string `toml:"probe_send" json:"probe_send"`
+	ProbeRecv     string `toml:"probe_recv" json:"probe_recv"`
+	ProbeRecvLen  int    `toml:"probe_recv_len" json:"probe_recv_len"`
+}
 
 type ExecHealthcheckConfig struct {
 	ExecCommand                string `toml:"exec_command" json:"exec_command,omitempty"`

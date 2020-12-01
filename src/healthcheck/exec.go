@@ -1,17 +1,18 @@
+package healthcheck
+
 /**
  * exec.go - Exec healthcheck
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package healthcheck
-
 import (
-	"../config"
-	"../core"
-	"../logging"
-	"../utils"
 	"time"
+
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
+	"github.com/yyyar/gobetween/logging"
+	"github.com/yyyar/gobetween/utils"
 )
 
 /**
@@ -30,13 +31,13 @@ func exec(t core.Target, cfg config.HealthcheckConfig, result chan<- CheckResult
 	out, err := utils.ExecTimeout(execTimeout, cfg.ExecCommand, t.Host, t.Port)
 	if err != nil {
 		// TODO: Decide better what to do in this case
-		checkResult.Live = false
+		checkResult.Status = Unhealthy
 		log.Warn(err)
 	} else {
 		if out == cfg.ExecExpectedPositiveOutput {
-			checkResult.Live = true
+			checkResult.Status = Healthy
 		} else if out == cfg.ExecExpectedNegativeOutput {
-			checkResult.Live = false
+			checkResult.Status = Unhealthy
 		} else {
 			log.Warn("Unexpected output: ", out)
 		}

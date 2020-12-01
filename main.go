@@ -5,24 +5,30 @@
 package main
 
 import (
-	"./api"
-	"./cmd"
-	"./config"
-	"./info"
-	"./logging"
-	"./manager"
-	"./utils/codec"
 	"log"
 	"math/rand"
 	"os"
 	"runtime"
 	"time"
+
+	"github.com/yyyar/gobetween/api"
+	"github.com/yyyar/gobetween/cmd"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/info"
+	"github.com/yyyar/gobetween/logging"
+	"github.com/yyyar/gobetween/manager"
+	"github.com/yyyar/gobetween/metrics"
+	"github.com/yyyar/gobetween/utils/codec"
 )
 
 /**
- * Version should be set while build using ldflags (see Makefile)
+ * version,revision,branch should be set while build using ldflags (see Makefile)
  */
-var version string
+var (
+	version  string
+	revision string
+	branch   string
+)
 
 /**
  * Initialize package
@@ -39,6 +45,8 @@ func init() {
 
 	// Save info
 	info.Version = version
+	info.Revision = revision
+	info.Branch = branch
 	info.StartTime = time.Now()
 
 }
@@ -47,6 +55,8 @@ func init() {
  * Entry point
  */
 func main() {
+
+	log.Printf("gobetween v%s", version)
 
 	env := os.Getenv("GOBETWEEN")
 	if env != "" && len(os.Args) > 1 {
@@ -67,13 +77,16 @@ func main() {
 	cmd.Execute(func(cfg *config.Config) {
 
 		// Configure logging
-		logging.Configure(cfg.Logging.Output, cfg.Logging.Level)
-
-		// Start API
-		go api.Start((*cfg).Api)
+		logging.Configure(cfg.Logging.Output, cfg.Logging.Level, cfg.Logging.Format)
 
 		// Start manager
-		go manager.Initialize(*cfg)
+		manager.Initialize(*cfg)
+
+		/* setup metrics */
+		metrics.Start((*cfg).Metrics)
+
+		// Start API
+		api.Start((*cfg).Api)
 
 		// block forever
 		<-(chan string)(nil)

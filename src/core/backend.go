@@ -1,10 +1,10 @@
+package core
+
 /**
  * backend.go - backend definition
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
-
-package core
 
 import (
 	"fmt"
@@ -27,6 +27,7 @@ type Backend struct {
  */
 type BackendStats struct {
 	Live               bool   `json:"live"`
+	Discovered         bool   `json:"discovered"`
 	TotalConnections   int64  `json:"total_connections"`
 	ActiveConnections  uint   `json:"active_connections"`
 	RefusedConnections uint64 `json:"refused_connections"`

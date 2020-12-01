@@ -1,30 +1,29 @@
+package tcp
+
 /**
  * server.go - proxy server implementation
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package tcp
-
 import (
 	"crypto/tls"
-	"crypto/x509"
-	"io/ioutil"
 	"net"
 	"time"
 
-	"../../balance"
-	"../../config"
-	"../../core"
-	"../../discovery"
-	"../../healthcheck"
-	"../../logging"
-	"../../stats"
-	"../../utils"
-	tlsutil "../../utils/tls"
-	"../../utils/tls/sni"
-	"../modules/access"
-	"../scheduler"
+	"github.com/yyyar/gobetween/balance"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
+	"github.com/yyyar/gobetween/discovery"
+	"github.com/yyyar/gobetween/healthcheck"
+	"github.com/yyyar/gobetween/logging"
+	"github.com/yyyar/gobetween/server/modules/access"
+	"github.com/yyyar/gobetween/server/scheduler"
+	"github.com/yyyar/gobetween/stats"
+	"github.com/yyyar/gobetween/utils"
+	"github.com/yyyar/gobetween/utils/proxyprotocol"
+	tlsutil "github.com/yyyar/gobetween/utils/tls"
+	"github.com/yyyar/gobetween/utils/tls/sni"
 )
 
 /**
@@ -64,6 +63,12 @@ type Server struct {
 
 	/* Tls config used to connect to backends */
 	backendsTlsConfg *tls.Config
+
+	/* Tls config used for incoming connections */
+	tlsConfig *tls.Config
+
+	/* Get certificate filled by external service */
+	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	/* ----- modules ----- */
 
@@ -106,12 +111,11 @@ func New(name string, cfg config.Server) (*Server, error) {
 		}
 	}
 
-	/* Add backend tls config if needed */
-	if cfg.BackendsTls != nil {
-		server.backendsTlsConfg, err = prepareBackendsTlsConfig(cfg)
-		if err != nil {
-			return nil, err
-		}
+	/* Add tls configs if needed */
+
+	server.backendsTlsConfg, err = tlsutil.MakeBackendTLSConfig(cfg.BackendsTls)
+	if err != nil {
+		return nil, err
 	}
 
 	log.Info("Creating '", name, "': ", cfg.Bind, " ", cfg.Balance, " ", cfg.Discovery.Kind, " ", cfg.Healthcheck.Kind)
@@ -130,6 +134,12 @@ func (this *Server) Cfg() config.Server {
  * Start server
  */
 func (this *Server) Start() error {
+
+	var err error
+	this.tlsConfig, err = tlsutil.MakeTlsConfig(this.cfg.Tls, this.GetCertificate)
+	if err != nil {
+		return err
+	}
 
 	go func() {
 
@@ -212,7 +222,7 @@ func (this *Server) Stop() {
 	this.stop <- true
 }
 
-func (this *Server) wrap(conn net.Conn, sniEnabled bool, tlsConfig *tls.Config) {
+func (this *Server) wrap(conn net.Conn, sniEnabled bool) {
 	log := logging.For("server.Listen.wrap")
 
 	var hostname string
@@ -231,8 +241,8 @@ func (this *Server) wrap(conn net.Conn, sniEnabled bool, tlsConfig *tls.Config) 
 		conn = sniConn
 	}
 
-	if tlsConfig != nil {
-		conn = tls.Server(conn, tlsConfig)
+	if this.tlsConfig != nil {
+		conn = tls.Server(conn, this.tlsConfig)
 	}
 
 	this.connect <- &core.TcpContext{
@@ -252,32 +262,12 @@ func (this *Server) Listen() (err error) {
 	// create tcp listener
 	this.listener, err = net.Listen("tcp", this.cfg.Bind)
 
-	var tlsConfig *tls.Config
-	sniEnabled := this.cfg.Sni != nil
-
-	if this.cfg.Protocol == "tls" {
-
-		// Create tls listener
-		var crt tls.Certificate
-		if crt, err = tls.LoadX509KeyPair(this.cfg.Tls.CertPath, this.cfg.Tls.KeyPath); err != nil {
-			log.Error(err)
-			return err
-		}
-
-		tlsConfig = &tls.Config{
-			Certificates:             []tls.Certificate{crt},
-			CipherSuites:             tlsutil.MapCiphers(this.cfg.Tls.Ciphers),
-			PreferServerCipherSuites: this.cfg.Tls.PreferServerCiphers,
-			MinVersion:               tlsutil.MapVersion(this.cfg.Tls.MinVersion),
-			MaxVersion:               tlsutil.MapVersion(this.cfg.Tls.MaxVersion),
-			SessionTicketsDisabled:   !this.cfg.Tls.SessionTickets,
-		}
-	}
-
 	if err != nil {
 		log.Error("Error starting ", this.cfg.Protocol+" server: ", err)
 		return err
 	}
+
+	sniEnabled := this.cfg.Sni != nil
 
 	go func() {
 		for {
@@ -288,7 +278,7 @@ func (this *Server) Listen() (err error) {
 				return
 			}
 
-			go this.wrap(conn, sniEnabled, tlsConfig)
+			go this.wrap(conn, sniEnabled)
 		}
 	}()
 
@@ -300,7 +290,7 @@ func (this *Server) Listen() (err error) {
  */
 func (this *Server) handle(ctx *core.TcpContext) {
 	clientConn := ctx.Conn
-	log := logging.For("server.handle")
+	log := logging.For("server.handle [" + this.cfg.Bind + "]")
 
 	/* Check access if needed */
 	if this.access != nil {
@@ -317,7 +307,7 @@ func (this *Server) handle(ctx *core.TcpContext) {
 	var err error
 	backend, err := this.scheduler.TakeBackend(ctx)
 	if err != nil {
-		log.Error(err, " Closing connection ", clientConn.RemoteAddr())
+		log.Error(err, "; Closing connection: ", clientConn.RemoteAddr())
 		return
 	}
 
@@ -341,7 +331,24 @@ func (this *Server) handle(ctx *core.TcpContext) {
 	this.scheduler.IncrementConnection(*backend)
 	defer this.scheduler.DecrementConnection(*backend)
 
-	/* Stat proxying */
+	/* Send proxy protocol header if configured */
+	if this.cfg.ProxyProtocol != nil {
+		switch this.cfg.ProxyProtocol.Version {
+		case "1":
+			log.Debug("Sending proxy_protocol v1 header ", clientConn.RemoteAddr(), " -> ", this.listener.Addr(), " -> ", backendConn.RemoteAddr())
+			err := proxyprotocol.SendProxyProtocolV1(clientConn, backendConn)
+			if err != nil {
+				log.Error(err)
+				return
+			}
+		default:
+			log.Error("Unsupported proxy_protocol version " + this.cfg.ProxyProtocol.Version + ", aborting connection")
+			return
+		}
+	}
+
+	/* ----- Stat proxying ----- */
+
 	log.Debug("Begin ", clientConn.RemoteAddr(), " -> ", this.listener.Addr(), " -> ", backendConn.RemoteAddr())
 	cs := proxy(clientConn, backendConn, utils.ParseDurationOrDefault(*this.cfg.BackendIdleTimeout, 0))
 	bs := proxy(backendConn, clientConn, utils.ParseDurationOrDefault(*this.cfg.ClientIdleTimeout, 0))
@@ -351,60 +358,20 @@ func (this *Server) handle(ctx *core.TcpContext) {
 		select {
 		case s, ok := <-cs:
 			isRx = ok
+			if !ok {
+				cs = nil
+				continue
+			}
 			this.scheduler.IncrementRx(*backend, s.CountWrite)
 		case s, ok := <-bs:
 			isTx = ok
+			if !ok {
+				bs = nil
+				continue
+			}
 			this.scheduler.IncrementTx(*backend, s.CountWrite)
 		}
 	}
 
 	log.Debug("End ", clientConn.RemoteAddr(), " -> ", this.listener.Addr(), " -> ", backendConn.RemoteAddr())
-}
-
-func prepareBackendsTlsConfig(cfg config.Server) (*tls.Config, error) {
-
-	log := logging.For("server.prepareBackendsTlsConfig")
-	var err error
-
-	result := &tls.Config{
-		InsecureSkipVerify:       cfg.BackendsTls.IgnoreVerify,
-		CipherSuites:             tlsutil.MapCiphers(cfg.BackendsTls.Ciphers),
-		PreferServerCipherSuites: cfg.BackendsTls.PreferServerCiphers,
-		MinVersion:               tlsutil.MapVersion(cfg.BackendsTls.MinVersion),
-		MaxVersion:               tlsutil.MapVersion(cfg.BackendsTls.MaxVersion),
-		SessionTicketsDisabled:   !cfg.BackendsTls.SessionTickets,
-	}
-
-	if cfg.BackendsTls.CertPath != nil && cfg.BackendsTls.KeyPath != nil {
-
-		var crt tls.Certificate
-
-		if crt, err = tls.LoadX509KeyPair(*cfg.BackendsTls.CertPath, *cfg.BackendsTls.KeyPath); err != nil {
-			log.Error(err)
-			return nil, err
-		}
-
-		result.Certificates = []tls.Certificate{crt}
-	}
-
-	if cfg.BackendsTls.RootCaCertPath != nil {
-
-		var caCertPem []byte
-
-		if caCertPem, err = ioutil.ReadFile(*cfg.BackendsTls.RootCaCertPath); err != nil {
-			log.Error(err)
-			return nil, err
-		}
-
-		caCertPool := x509.NewCertPool()
-		if ok := caCertPool.AppendCertsFromPEM(caCertPem); !ok {
-			log.Error("Unable to load root pem")
-		}
-
-		result.RootCAs = caCertPool
-
-	}
-
-	return result, nil
-
 }

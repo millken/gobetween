@@ -1,13 +1,17 @@
+package tls
+
 /**
  * tls.go - Tls mapping utils
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package tls
-
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"io/ioutil"
+
+	"github.com/yyyar/gobetween/config"
 )
 
 /**
@@ -70,4 +74,86 @@ func MapCiphers(ciphers []string) []uint16 {
 	}
 
 	return result
+}
+
+func MakeTlsConfig(tlsC *config.Tls, getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) (*tls.Config, error) {
+
+	if tlsC == nil {
+		return nil, nil
+	}
+
+	tlsConfig := &tls.Config{}
+
+	tlsConfig.CipherSuites = MapCiphers(tlsC.Ciphers)
+	tlsConfig.PreferServerCipherSuites = tlsC.PreferServerCiphers
+	tlsConfig.MinVersion = MapVersion(tlsC.MinVersion)
+	tlsConfig.MaxVersion = MapVersion(tlsC.MaxVersion)
+	tlsConfig.SessionTicketsDisabled = !tlsC.SessionTickets
+
+	if getCertificate != nil {
+		tlsConfig.GetCertificate = getCertificate
+		return tlsConfig, nil
+	}
+
+	var crt tls.Certificate
+	var err error
+	if crt, err = tls.LoadX509KeyPair(tlsC.CertPath, tlsC.KeyPath); err != nil {
+		return nil, err
+	}
+
+	tlsConfig.Certificates = []tls.Certificate{crt}
+
+	return tlsConfig, nil
+}
+
+/**
+ * MakeBackendTLSConfig makes a tls.Config for connecting to backends
+ */
+func MakeBackendTLSConfig(backendsTls *config.BackendsTls) (*tls.Config, error) {
+
+	if backendsTls == nil {
+		return nil, nil
+	}
+
+	var err error
+
+	result := &tls.Config{
+		InsecureSkipVerify:       backendsTls.IgnoreVerify,
+		CipherSuites:             MapCiphers(backendsTls.Ciphers),
+		PreferServerCipherSuites: backendsTls.PreferServerCiphers,
+		MinVersion:               MapVersion(backendsTls.MinVersion),
+		MaxVersion:               MapVersion(backendsTls.MaxVersion),
+		SessionTicketsDisabled:   !backendsTls.SessionTickets,
+	}
+
+	if backendsTls.CertPath != nil && backendsTls.KeyPath != nil {
+
+		var crt tls.Certificate
+
+		if crt, err = tls.LoadX509KeyPair(*backendsTls.CertPath, *backendsTls.KeyPath); err != nil {
+			return nil, err
+		}
+
+		result.Certificates = []tls.Certificate{crt}
+	}
+
+	if backendsTls.RootCaCertPath != nil {
+
+		var caCertPem []byte
+
+		if caCertPem, err = ioutil.ReadFile(*backendsTls.RootCaCertPath); err != nil {
+			return nil, err
+		}
+
+		caCertPool := x509.NewCertPool()
+		if ok := caCertPool.AppendCertsFromPEM(caCertPem); !ok {
+			return nil, err
+		}
+
+		result.RootCAs = caCertPool
+
+	}
+
+	return result, nil
+
 }

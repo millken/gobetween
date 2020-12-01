@@ -1,18 +1,17 @@
+package balance
+
 /**
  * registry.go - balancers registry
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package balance
-
 import (
 	"reflect"
 
-	"./middleware"
-
-	"../config"
-	"../core"
+	"github.com/yyyar/gobetween/balance/middleware"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
 )
 
 /**
@@ -28,6 +27,7 @@ func init() {
 	typeRegistry["roundrobin"] = reflect.TypeOf(RoundrobinBalancer{})
 	typeRegistry["weight"] = reflect.TypeOf(WeightBalancer{})
 	typeRegistry["iphash"] = reflect.TypeOf(IphashBalancer{})
+	typeRegistry["iphash1"] = reflect.TypeOf(Iphash1Balancer{})
 	typeRegistry["leastbandwidth"] = reflect.TypeOf(LeastbandwidthBalancer{})
 }
 

@@ -1,20 +1,22 @@
+package scheduler
+
 /**
  * scheduler.go - schedule operations on backends and manages them
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package scheduler
-
 import (
+	"fmt"
 	"time"
 
-	"../../core"
-	"../../discovery"
-	"../../healthcheck"
-	"../../logging"
-	"../../stats"
-	"../../stats/counters"
+	"github.com/yyyar/gobetween/core"
+	"github.com/yyyar/gobetween/discovery"
+	"github.com/yyyar/gobetween/healthcheck"
+	"github.com/yyyar/gobetween/logging"
+	"github.com/yyyar/gobetween/metrics"
+	"github.com/yyyar/gobetween/stats"
+	"github.com/yyyar/gobetween/stats/counters"
 )
 
 /**
@@ -70,9 +72,6 @@ type Scheduler struct {
 	/* Current cached backends map */
 	backends map[core.Target]*core.Backend
 
-	/* Current cached backends list (same as backends.list) but preserving order */
-	backendsList []*core.Backend
-
 	/* Stats */
 	StatsHandler *stats.Handler
 
@@ -95,11 +94,12 @@ func (this *Scheduler) Start() {
 
 	log := logging.For("scheduler")
 
-	log.Info("Starting scheduler")
+	log.Info("Starting scheduler ", this.StatsHandler.Name)
 
 	this.ops = make(chan Op)
 	this.elect = make(chan ElectRequest)
 	this.stop = make(chan bool)
+	this.backends = make(map[core.Target]*core.Backend)
 
 	this.Discovery.Start()
 	this.Healthcheck.Start()
@@ -126,7 +126,7 @@ func (this *Scheduler) Start() {
 
 			// handle backend healthcheck result
 			case checkResult := <-this.Healthcheck.Out:
-				this.HandleBackendLiveChange(checkResult.Target, checkResult.Live)
+				this.HandleBackendLiveChange(checkResult.Target, checkResult.Status == healthcheck.Healthy)
 
 			/* ----- stats ----- */
 
@@ -152,10 +152,11 @@ func (this *Scheduler) Start() {
 
 			// handle scheduler stop
 			case <-this.stop:
-				log.Info("Stopping scheduler")
+				log.Info("Stopping scheduler ", this.StatsHandler.Name)
 				backendsPushTicker.Stop()
 				this.Discovery.Stop()
 				this.Healthcheck.Stop()
+				metrics.RemoveServer(fmt.Sprintf("%s", this.StatsHandler.Name), this.backends)
 				return
 			}
 		}
@@ -203,6 +204,8 @@ func (this *Scheduler) HandleBackendStatsChange(target core.Target, bs *counters
 	backend.Stats.TxBytes = bs.TxTotal
 	backend.Stats.RxSecond = bs.RxSecond
 	backend.Stats.TxSecond = bs.TxSecond
+
+	metrics.ReportHandleBackendStatsChange(fmt.Sprintf("%s", this.StatsHandler.Name), target, this.backends)
 }
 
 /**
@@ -217,6 +220,8 @@ func (this *Scheduler) HandleBackendLiveChange(target core.Target, live bool) {
 	}
 
 	backend.Stats.Live = live
+
+	metrics.ReportHandleBackendLiveChange(fmt.Sprintf("%s", this.StatsHandler.Name), target, live)
 }
 
 /**
@@ -224,26 +229,39 @@ func (this *Scheduler) HandleBackendLiveChange(target core.Target, live bool) {
  */
 func (this *Scheduler) HandleBackendsUpdate(backends []core.Backend) {
 
-	updated := map[core.Target]*core.Backend{}
-	updatedList := make([]*core.Backend, len(backends))
+	// first mark all existing backends as not discovered
+	for _, b := range this.backends {
+		b.Stats.Discovered = false
+	}
 
-	for i := range backends {
-		b := backends[i]
+	for _, b := range backends {
 		oldB, ok := this.backends[b.Target]
 
 		if ok {
 			// if we have this backend, update it's discovery properties
-			updatedB := oldB.MergeFrom(b)
-			updated[oldB.Target] = updatedB
-			updatedList[i] = updatedB
-		} else {
-			updated[b.Target] = &b
-			updatedList[i] = &b
+			oldB.MergeFrom(b)
+			// mark found backend as discovered
+			oldB.Stats.Discovered = true
+			continue
 		}
+
+		b := b // b has to be local variable in order to make unique pointers
+		b.Stats.Discovered = true
+		this.backends[b.Target] = &b
+
+		b.Stats.Live = this.Healthcheck.InitialBackendHealthCheckStatus() == healthcheck.Healthy
 	}
 
-	this.backends = updated
-	this.backendsList = updatedList
+	//remove not discovered backends without active connections
+	for t, b := range this.backends {
+		if b.Stats.Discovered || b.Stats.ActiveConnections > 0 {
+			continue
+		}
+
+		metrics.RemoveBackend(this.StatsHandler.Name, b)
+
+		delete(this.backends, t)
+	}
 }
 
 /**
@@ -251,11 +269,15 @@ func (this *Scheduler) HandleBackendsUpdate(backends []core.Backend) {
  */
 func (this *Scheduler) HandleBackendElect(req ElectRequest) {
 
-	// Filter only live backends
+	// Filter only live and discovered backends
 	var backends []*core.Backend
-	for _, b := range this.backendsList {
+	for _, b := range this.backends {
 
 		if !b.Stats.Live {
+			continue
+		}
+
+		if !b.Stats.Discovered {
 			continue
 		}
 
@@ -308,6 +330,7 @@ func (this *Scheduler) HandleOp(op Op) {
 		log.Warn("Don't know how to handle op ", op.op)
 	}
 
+	metrics.ReportHandleOp(fmt.Sprintf("%s", this.StatsHandler.Name), op.target, this.backends)
 }
 
 /**

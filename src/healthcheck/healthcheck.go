@@ -1,14 +1,14 @@
+package healthcheck
+
 /**
  * healthcheck.go - Healtheck
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package healthcheck
-
 import (
-	"../config"
-	"../core"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
 )
 
 /**
@@ -16,6 +16,14 @@ import (
  * Returns channel in which only one check result will be delivered
  */
 type CheckFunc func(core.Target, config.HealthcheckConfig, chan<- CheckResult)
+
+type HealthCheckStatus int32
+
+const (
+	Initial HealthCheckStatus = iota
+	Unhealthy
+	Healthy
+)
 
 /**
  * Check result
@@ -27,7 +35,7 @@ type CheckResult struct {
 	Target core.Target
 
 	/* Check live status */
-	Live bool
+	Status HealthCheckStatus
 }
 
 /**
@@ -64,6 +72,7 @@ var registry = make(map[string]CheckFunc)
  */
 func init() {
 	registry["ping"] = ping
+	registry["probe"] = probe
 	registry["exec"] = exec
 	registry["none"] = nil
 }
@@ -146,7 +155,7 @@ func (this *Healthcheck) UpdateWorkers(targets []core.Target) {
 				cfg:    this.cfg,
 				check:  this.check,
 				LastResult: CheckResult{
-					Live: true,
+					Status: Initial,
 				},
 			}
 			keep.Start()
@@ -172,6 +181,27 @@ func (this *Healthcheck) UpdateWorkers(targets []core.Target) {
 
 	this.workers = result
 
+}
+
+func (this *Healthcheck) HasCheck() bool {
+	return this.cfg.Kind != "none"
+}
+
+func (this *Healthcheck) InitialBackendHealthCheckStatus() HealthCheckStatus {
+	if !this.HasCheck() {
+		return Healthy
+	}
+	if this.cfg.InitialStatus != nil {
+		switch *this.cfg.InitialStatus {
+		case "unhealthy":
+			return Unhealthy
+		case "healthy":
+			return Healthy
+		default:
+			panic("Healthcheck invalid initial status, this should have been validated in manager, but has invalid value " + *this.cfg.InitialStatus)
+		}
+	}
+	return Healthy
 }
 
 /**

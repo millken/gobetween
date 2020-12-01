@@ -1,17 +1,18 @@
+package logging
+
 /**
  * log.go - logging wrapper
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package logging
-
 import (
 	"bytes"
 	"fmt"
-	"github.com/Sirupsen/logrus"
 	"os"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 /**
@@ -26,7 +27,7 @@ func init() {
 /**
  * Configure logging
  */
-func Configure(output string, l string) {
+func Configure(output string, l string, format string) {
 
 	if output == "" || output == "stdout" {
 		logrus.SetOutput(os.Stdout)
@@ -38,6 +39,10 @@ func Configure(output string, l string) {
 			logrus.Fatal(err)
 		}
 		logrus.SetOutput(f)
+	}
+
+	if format == "json" {
+		logrus.SetFormatter(&logrus.JSONFormatter{})
 	}
 
 	if l == "" {

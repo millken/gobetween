@@ -1,15 +1,16 @@
+package api
+
 /**
  * api.go - rest api implementation
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
-package api
 
 import (
-	"../config"
-	"../logging"
-	"github.com/gin-gonic/gin"
 	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/logging"
 )
 
 /* gin app */
@@ -62,18 +63,23 @@ func Start(cfg config.ApiConfig) {
 	attachRoot(r)
 	attachServers(r)
 
-	var err error
-	/* start rest api server */
-	if cfg.Tls != nil {
-		log.Info("Starting HTTPS server ", cfg.Bind)
-		err = app.RunTLS(cfg.Bind, cfg.Tls.CertPath, cfg.Tls.KeyPath)
-	} else {
-		log.Info("Starting HTTP server ", cfg.Bind)
-		err = app.Run(cfg.Bind)
-	}
+	/* attach endpoints with no auth */
+	p := app.Group("/")
+	attachPublic(p)
 
-	if err != nil {
-		log.Fatal(err)
-	}
+	go func() {
+		var err error
+		/* start rest api server */
+		if cfg.Tls != nil {
+			log.Info("Starting HTTPS server ", cfg.Bind)
+			err = app.RunTLS(cfg.Bind, cfg.Tls.CertPath, cfg.Tls.KeyPath)
+		} else {
+			log.Info("Starting HTTP server ", cfg.Bind)
+			err = app.Run(cfg.Bind)
+		}
 
+		if err != nil {
+			log.Fatal(err)
+		}
+	}()
 }

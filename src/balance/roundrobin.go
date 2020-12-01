@@ -1,15 +1,16 @@
+package balance
+
 /**
  * roundrobin.go - roundrobin balance impl
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package balance
-
 import (
 	"errors"
+	"sort"
 
-	"../core"
+	"github.com/yyyar/gobetween/core"
 )
 
 /**
@@ -29,6 +30,10 @@ func (b *RoundrobinBalancer) Elect(context core.Context, backends []*core.Backen
 	if len(backends) == 0 {
 		return nil, errors.New("Can't elect backend, Backends empty")
 	}
+
+	sort.SliceStable(backends, func(i, j int) bool {
+		return backends[i].Target.String() < backends[j].Target.String()
+	})
 
 	if b.current >= len(backends) {
 		b.current = 0

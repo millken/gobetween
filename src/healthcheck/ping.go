@@ -1,17 +1,18 @@
+package healthcheck
+
 /**
  * ping.go - TCP ping healthcheck
  *
  * @author Yaroslav Pogrebnyak <yyyaroslav@gmail.com>
  */
 
-package healthcheck
-
 import (
-	"../config"
-	"../core"
-	"../logging"
 	"net"
 	"time"
+
+	"github.com/yyyar/gobetween/config"
+	"github.com/yyyar/gobetween/core"
+	"github.com/yyyar/gobetween/logging"
 )
 
 /**
@@ -29,9 +30,9 @@ func ping(t core.Target, cfg config.HealthcheckConfig, result chan<- CheckResult
 
 	conn, err := net.DialTimeout("tcp", t.Address(), pingTimeoutDuration)
 	if err != nil {
-		checkResult.Live = false
+		checkResult.Status = Unhealthy
 	} else {
-		checkResult.Live = true
+		checkResult.Status = Healthy
 		conn.Close()
 	}
 
