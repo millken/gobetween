@@ -1,3 +1,5 @@
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner-direct.svg)](https://vshymanskyy.github.io/StandWithUkraine)
+
 <img src="/logo.png?raw=true" alt="gobetween" width="256px" />
 
 [![Tag](https://img.shields.io/github/tag/yyyar/gobetween.svg)](https://github.com/yyyar/gobetween/releases/latest)
@@ -12,7 +14,7 @@
 
 **gobetween** -  modern & minimalistic load balancer and reverse-proxy for the :cloud: Cloud era.
 
-**Current status**: *Under active development*. Currently in use in several highly loaded production environments.
+**Current status**: *Maintenance mode, accepting PRs*. Currently in use in several highly loaded production environments.
 
 ## Features
 
